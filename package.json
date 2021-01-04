@@ -9,7 +9,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/wanseob/solidity-mmr.git"
+    "url": "git+https://github.com/Snowfork/solidity-mmr.git"
   },
   "keywords": [
     "merkle",
@@ -17,12 +17,12 @@
     "range",
     "mmr"
   ],
-  "author": "Wanseob Lim",
+  "author": "Snowfork",
   "license": "MIT",
   "bugs": {
-    "url": "https://github.com/wanseob/solidity-mmr/issues"
+    "url": "https://github.com/Snowfork/solidity-mmr/issues"
   },
-  "homepage": "https://github.com/wanseob/solidity-mmr#readme",
+  "homepage": "https://github.com/Snowfork/solidity-mmr#readme",
   "devDependencies": {
     "@types/chai": "^4.2.4",
     "@types/mocha": "^5.2.7",
