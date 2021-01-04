@@ -10,19 +10,23 @@ contract MMRWrapper {
 
     }
 
-    function append(bytes memory data) public {
-        mTree.append(data);
-    }
-
-    function getRoot() public view returns (bytes32) {
-        return mTree.getRoot();
+    function append(bytes32 data) public {
+        return mTree.append(data);
     }
 
     function getSize() public view returns (uint256) {
         return mTree.getSize();
     }
 
-    function getMerkleProof(uint256 index) public view returns (
+    function getWidth() public view returns (uint256) {
+        return mTree.getWidth();
+    }
+
+    function getHashes() public view returns (bytes32[] memory) {
+        return mTree.getHashes();
+    }
+
+    function getMerkleProof(uint256 index) public returns (
         bytes32 root,
         uint256 width,
         bytes32[] memory peakBagging,

@@ -1,9 +1,6 @@
 pragma solidity >=0.4.21 <0.6.0;
 
-
 /**
- * @author Wanseob Lim <email@wanseob.com>
- * @title Merkle Mountain Range solidity library
  *
  * @dev The index of this MMR implementation starts from 1 not 0.
  *      And it uses keccak256 for its hash function instead of blake2b
@@ -22,13 +19,7 @@ library MMR {
      * @dev This only stores the hashed value of the leaf.
      *      If you need to retrieve the detail data later, use a map to store them.
      */
-    function append(Tree storage tree, bytes memory data) public {
-        // Hash the leaf node first
-        bytes32 dataHash = keccak256(data);
-        if(keccak256(tree.data[dataHash]) != dataHash) {
-            tree.data[dataHash] = data;
-        }
-        bytes32 leaf = hashLeaf(tree.size + 1, dataHash);
+    function append(Tree storage tree, bytes32 leaf) public {
         // Put the hashed leaf to the map
         tree.hashes[tree.size + 1] = leaf;
         tree.width += 1;
@@ -38,11 +29,10 @@ library MMR {
         tree.size = getSize(tree.width);
         // Starting from the left-most peak, get all peak hashes using _getOrCreateNode() function.
         bytes32[] memory peaks = new bytes32[](peakIndexes.length);
+
         for (uint i = 0; i < peakIndexes.length; i++) {
             peaks[i] = _getOrCreateNode(tree, peakIndexes[i]);
         }
-        // Create the root hash and update the tree
-        tree.root = peakBagging(tree.width, peaks);
     }
 
     function getPeaks(Tree storage tree) public view returns (bytes32[] memory peaks) {
@@ -70,6 +60,7 @@ library MMR {
 
     /**
      * @dev It returns the root value of the tree
+     *      TODO: MMR's stored root is incorrect. Have to calculate it statelessly.
      */
     function getRoot(Tree storage tree) public view returns (bytes32) {
         return tree.root;
@@ -83,6 +74,13 @@ library MMR {
     }
 
     /**
+     * @dev It returns the width of the tree
+     */
+    function getWidth(Tree storage tree) public view returns (uint256) {
+        return tree.width;
+    }
+
+    /**
      * @dev It returns the hash value of a node for the given position. Note that the index starts from 1
      */
     function getNode(Tree storage tree, uint256 index) public view returns (bytes32) {
@@ -90,9 +88,20 @@ library MMR {
     }
 
     /**
+     * @dev It returns the hash value of a node for the given position. Note that the index starts from 1
+     */
+    function getHashes(Tree storage tree) public view returns (bytes32[] memory) {
+        bytes32[] memory hashes;
+        for(uint i = 0; i < tree.size; i++) {
+            hashes[i] = tree.hashes[i];
+        }
+        return hashes;
+    }
+
+    /**
      * @dev It returns a merkle proof for a leaf. Note that the index starts from 1
      */
-    function getMerkleProof(Tree storage tree, uint256 index) public view returns (
+    function getMerkleProof(Tree storage tree, uint256 index) public returns (
         bytes32 root,
         uint256 width,
         bytes32[] memory peakBagging,
@@ -101,13 +110,13 @@ library MMR {
         require(index < tree.size, "Out of range");
         require(isLeaf(index), "Not a leaf");
 
-        root = tree.root;
         width = tree.width;
         // Find all peaks for bagging
         uint256[] memory peaks = getPeakIndexes(tree.width);
 
         peakBagging = new bytes32[](peaks.length);
         uint256 cursor;
+
         for (uint i = 0; i < peaks.length; i++) {
             // Collect the hash of all peaks
             peakBagging[i] = tree.hashes[peaks[i]];
@@ -116,11 +125,15 @@ library MMR {
                 cursor = peaks[i];
             }
         }
+
+        root = combineBaggedPeaks(peakBagging);
+
         uint256 left;
         uint256 right;
 
         // Get hashes of the siblings in the mountain which the index belongs to.
         // It moves the cursor from the summit of the mountain down to the target index
+        // TODO: Double-check that siblings are accurate
         uint8 height = heightAt(cursor);
         siblings = new bytes32[](height - 1);
         while (cursor != index) {
@@ -131,6 +144,19 @@ library MMR {
             // Remaining node is the sibling
             siblings[height - 1] = tree.hashes[index <= left ? right : left];
         }
+    }
+
+    // TODO: Fix so it works with for variable lengths. Currently only tested with peakBagging.length == 3.
+    function combineBaggedPeaks(bytes32[] memory peakBagging) public pure returns (bytes32 root) {
+        bytes32 temp;
+        for(uint i = peakBagging.length-1; i > 0; i--) {
+            if(i == peakBagging.length-1) {
+                temp = keccak256(abi.encodePacked(peakBagging[i], peakBagging[i-1]));
+            } else {
+                temp = keccak256(abi.encodePacked(temp, peakBagging[i-1]));
+            }
+        }
+        root = temp;
     }
 
     function rollUp(
@@ -193,8 +219,7 @@ library MMR {
         bytes32[255] memory nextPeakMap
     ) {
         uint newWidth = width + 1;
-        uint cursorIndex = getLeafIndex(newWidth);
-        bytes32 cursorNode = hashLeaf(cursorIndex, itemHash);
+        bytes32 cursorNode = itemHash;
         uint bitIndex;
         uint peakRef;
         bool prevPeakExist;
@@ -212,9 +237,8 @@ library MMR {
                 nextPeakExist = (newWidth & peakRef) != 0;
 
                 // Get new cursor node with hashing the peak and the current cursor
-                cursorIndex++;
                 if(prevPeakExist) {
-                    cursorNode = hashBranch(cursorIndex, prevPeakMap[bitIndex], cursorNode);
+                    cursorNode = hashParent(prevPeakMap[bitIndex], cursorNode);
                 }
                 // If new peak exists for the bit index
                 if(nextPeakExist) {
@@ -241,85 +265,93 @@ library MMR {
         bytes32 root,
         uint256 width,
         uint256 index,
-        bytes memory value,
+        bytes32 value,
         bytes32[] memory peaks,
         bytes32[] memory siblings
     ) public pure returns (bool) {
+
         uint size = getSize(width);
         require(size >= index, "Index is out of range");
         // Check the root equals the peak bagging hash
-        require(root == keccak256(abi.encodePacked(size, keccak256(abi.encodePacked(size, peaks)))), "Invalid root hash from the peaks");
+        require(root == combineBaggedPeaks(peaks), "Invalid root hash from the peaks");
 
-        // Find the mountain where the target index belongs to
-        uint256 cursor;
-        bytes32 targetPeak;
-        uint256[] memory peakIndexes = getPeakIndexes(width);
-        for (uint i = 0; i < peakIndexes.length; i++) {
-            if (peakIndexes[i] >= index) {
-                targetPeak = peaks[i];
-                cursor = peakIndexes[i];
-                break;
-            }
+        if(root == combineBaggedPeaks(peaks)) {
+            return true;
         }
-        require(targetPeak != bytes32(0), "Target is not found");
+        return false;
 
-        // Find the path climbing down
-        uint256[] memory path = new uint256[](siblings.length + 1);
-        uint256 left;
-        uint256 right;
-        uint8 height = uint8(siblings.length) + 1;
-        while (height > 0) {
-            // Record the current cursor and climb down
-            path[--height] = cursor;
-            if (cursor == index) {
-                // On the leaf node. Stop climbing down
-                break;
-            } else {
-                // On the parent node. Go left or right
-                (left, right) = getChildren(cursor);
-                cursor = index > left ? right : left;
-                continue;
-            }
-        }
+        // TODO: Use value's siblings and bagged peaks
+        // // Find the mountain where the target index belongs to
+        // uint256 cursor;
+        // bytes32 targetPeak;
+        // uint256[] memory peakIndexes = getPeakIndexes(width);
+        // for (uint i = 0; i < peakIndexes.length; i++) {
+        //     if (peakIndexes[i] >= index) {
+        //         targetPeak = peaks[i];
+        //         cursor = peakIndexes[i];
+        //         break;
+        //     }
+        // }
+        // require(targetPeak != bytes32(0), "Target is not found");
 
-        // Calculate the summit hash climbing up again
-        bytes32 node;
-        while (height < path.length) {
-            // Move cursor
-            cursor = path[height];
-            if (height == 0) {
-                // cursor is on the leaf
-                node = hashLeaf(cursor, keccak256(value));
-            } else if (cursor - 1 == path[height - 1]) {
-                // cursor is on a parent and a sibling is on the left
-                node = hashBranch(cursor, siblings[height - 1], node);
-            } else {
-                // cursor is on a parent and a sibling is on the right
-                node = hashBranch(cursor, node, siblings[height - 1]);
-            }
-            // Climb up
-            height++;
-        }
+        // // Find the path climbing down
+        // uint256[] memory path = new uint256[](siblings.length + 1);
+        // uint256 left;
+        // uint256 right;
+        // uint8 height = uint8(siblings.length) + 1;
+        // while (height > 0) {
+        //     // Record the current cursor and climb down
+        //     path[--height] = cursor;
+        //     if (cursor == index) {
+        //         // On the leaf node. Stop climbing down
+        //         break;
+        //     } else {
+        //         // On the parent node. Go left or right
+        //         (left, right) = getChildren(cursor);
+        //         cursor = index > left ? right : left;
+        //         continue;
+        //     }
+        // }
 
-        // Computed hash value of the summit should equal to the target peak hash
-        require(node == targetPeak, "Hashed peak is invalid");
-        return true;
+        // // Calculate the summit hash climbing up again
+        // bytes32 node;
+        // while (height < path.length) {
+        //     // Move cursor
+        //     cursor = path[height];
+        //     if (height == 0) {
+        //         // cursor is on the leaf
+        //         node = value;
+        //     } else if (cursor - 1 == path[height - 1]) {
+        //         // cursor is on a parent and a sibling is on the left
+        //         node = hashParent(siblings[height - 1], node);
+        //     } else {
+        //         // cursor is on a parent and a sibling is on the right
+        //         node = hashParent(node, siblings[height - 1]);
+        //     }
+        //     // Climb up
+        //     height++;
+        // }
+
+        // // Computed hash value of the summit should equal to the target peak hash
+        // require(node == targetPeak, "Hashed peak is invalid");
+        // return true;
     }
 
     /**
-     * @dev It returns the hash a parent node with hash(M | Left child | Right child)
+     * @dev It returns the hash a parent node with hash(Left child | Right child)
      *      M is the index of the node
      */
-    function hashBranch(uint256 index, bytes32 left, bytes32 right) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(index, left, right));
+
+    function hashParent(bytes32 left, bytes32 right) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(left, right));
     }
 
     /**
-     * @dev it returns the hash of a leaf node with hash(M | DATA )
+     * @dev it returns the hash of a leaf node with hash(DATA )
      *      M is the index of the node
      */
-    function hashLeaf(uint256 index, bytes32 dataHash) public pure returns (bytes32) {
-        return keccak256(abi.encodePacked(index, dataHash));
+    function hashLeaf(bytes32 dataHash) public pure returns (bytes32) {
+        return keccak256(abi.encodePacked(dataHash));
     }
 
     /**
@@ -404,7 +436,7 @@ library MMR {
             (uint256 leftIndex, uint256 rightIndex) = getChildren(index);
             bytes32 leftHash = _getOrCreateNode(tree, leftIndex);
             bytes32 rightHash = _getOrCreateNode(tree, rightIndex);
-            tree.hashes[index] = hashBranch(index, leftHash, rightHash);
+            tree.hashes[index] = hashParent(leftHash, rightHash);
         }
         return tree.hashes[index];
     }

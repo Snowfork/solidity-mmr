@@ -5,10 +5,6 @@ chai.use(require('chai-bn')(web3.utils.BN));
 chai.use(require('chai-as-promised'));
 chai.should();
 
-/**
- * Merkle Mountain Range Tree
- * MMR
- */
 contract('MerkleMountainRange', async () => {
   let mmrLib;
   let res;
@@ -65,19 +61,11 @@ contract('MerkleMountainRange', async () => {
       });
     });
     describe('hashBranch()', async () => {
-      it('should return sha3(m|left,right)', async () => {
+      it('should return sha3(left,right)', async () => {
         let left = web3.utils.soliditySha3(1, '0x00'); // At 1
         let right = web3.utils.soliditySha3(2, '0x00'); // At 2
-        res = await mmrLib.hashBranch(3, left, right);
-        res.should.equal(web3.utils.soliditySha3(3, left, right));
-      });
-    });
-    describe('hashLeaf()', async () => {
-      it('should return sha3(m|data)', async () => {
-        let dataHash = web3.utils.soliditySha3('0xa300');
-        let leaf = web3.utils.soliditySha3(23, dataHash); // At 1
-        res = await mmrLib.hashLeaf(23, dataHash);
-        res.should.equal(leaf);
+        res = await mmrLib.hashParent(left, right);
+        res.should.equal(web3.utils.soliditySha3(left, right));
       });
     });
     describe('mountainHeight()', async () => {
@@ -126,95 +114,83 @@ contract('MerkleMountainRange', async () => {
     });
   });
 
-  context.skip('Gas usage test', async () => {
-    it('inserted 1000 items to the tree', async () => {
-      let mmr = await MMRWrapper.new();
-      let total = 0;
-      let res;
-      for (let i = 0; i < 1000; i++) {
-        res = await mmr.append('0x0000');
-        total += res.receipt.gasUsed;
-      }
-      console.log(`Used ${total / 1000} on average to append 1000 items`);
-    });
-  });
-
-  context('Append items to an on-chain MMR tree', async () => {
-    describe('append()', async () => {
-      it('should increase the size to 15 when 8 items are added', async () => {
-        let mmr = await MMRWrapper.new();
-        for (let i = 0; i < 8; i++) {
-          await mmr.append('0x0000');
-        }
-        (await mmr.getSize()).should.be.a.bignumber.that.equals('15');
-      });
-      it('should increase the size to 50 when 27 items are added', async () => {
-        let mmr = await MMRWrapper.new();
-        for (let i = 0; i < 27; i++) {
-          await mmr.append('0x0000');
-        }
-        (await mmr.getSize()).should.be.a.bignumber.that.equals('50');
-      });
-    });
-    describe('getMerkleProof()', async () => {
-      /**
-             |[LEAF](1, 0x0000) => 0xa85e69ea988ed58c849a3537e0237f906baec7697351ef6830751a984b45b9ee'
-             |------[NODE](3, 0xa853.., 0xea7...) => 0x1ef993f0cf2a6b453c12c4dc5c634d9d509c55a9d27d849cc2105a73fa7822b5'
-             |[LEAF](2, 0x0001) => 0xea7ca2ce425d20eee8c18f2aefbd660a76266e5e5351698d04b333187db92044'
-             |------------[PEAK]  (7, 0x1ef9..., 0x91bd...)=> 0xfdb618490bb72540adc4f60681c449063ccd284c200b5524d55c4ecde3c28cc5'
-             |[LEAF](4, 0x0002) => 0x5b09d08b1fd4a322d48fd6cb6bb49f11ef5b641c034cf885689eecb0d0aaaf37'
-             |------[NODE](6, 0x5b09..., 0xd360...) => 0x91bd82d9d8326ed10fa09b58157a382fa2b14f86c0e0beff093cf8d2eabf1089'
-             |[LEAF](5, 0x0003) => 0xd360c2ccda5896b9ae78e29e4f66d65891a273e9e925a146b5ca9b21f3082b7e'
-             |
-             |[LEAF](8, 0x0004) => 0x9320264d7bff01df37485d2d0fb3607841b37b38a0ff55707407e236318f03a4'
-             |------[PEAK](10, 0x9320..., 0x91ea...) => 0x3fd82e5dd8a518732fa1bcb1ed12f15c69e5a4a2dca3a3b8bdbb457b6f6750bb'
-             |[LEAF](9, 0x0005) => 0x91eafe2c928033160404d65f4f5e09c1b8a4411afd127753db0dcdc522897c57'
-             |[PEAK](11, 0x0006) => 0x2fceabdcb4c1a9780bcdb9b0bdedc6d778319816dbf397d910228d48ff988646'
-
-             Peak Bagging: sha3(11 | sha3(11 | 0xfdb61...| 0x3fd8... | 0x2fce...')) = 0x93e567ec8f93fd9917acde01f1fe243ca40e3fe499592ac8602447757993461f')
-             */
-      let mmr;
-      before(async () => {
-        mmr = await MMRWrapper.new();
-        for (let i = 0; i < 7; i++) {
-          await mmr.append(`0x000${i}`);
-        }
-        let index = 8;
-        res = await mmr.getMerkleProof(index);
-      });
-      it('should return 0x2f... for its root value', async () => {
-        res.root.should.equal('0x88dfff1699bf22520652e93f236f3f58959d4c27dea45f51055a2d77fb93ec11');
-      });
-      it('should return 7 for its width', async () => {
-        res.width.should.be.a.bignumber.that.equals('7');
-      });
-      it('should return [0xfdb6.., 0x3fd8.., 0x2fce..] for its peaks', async () => {
-        res.peakBagging[0].should.equal('0x3ac80852966392520aa17c48a62b2dfe22b108dcd87c8f23379d4c85a2df4d65');
-        res.peakBagging[1].should.equal('0xf2edcdb56d70287f5073604592c0c450defa40606011d674872c8f5564d9467d');
-        res.peakBagging[2].should.equal('0x35a18c4845979c4361b304605bb19b195d3cc2417eeed4e4e422fcc6ec0a4c1e');
-      });
-      it('should return hash value at the index 9 as its sibling', async () => {
-        res.siblings[0].should.equal('0x700084bf5cb6e85b7bd0eeeac40470f14a4a91ddf4d05070369aa9cf48a0e51e');
-      });
-    });
+  context('MMR verification', async () => {
     describe('inclusionProof()', async () => {
+      let leafHashes = [
+        '0xe8e77626586f73b955364c7b4bbf0bb7f7685ebd40e852b164633a4acbd3244c', // 0
+        '0xe37890bf230cf36ea140a5dbb9a561aa7ef84f8f995873db8386eba4a95c7bbe', // 1
+        '0x2b97a4b75a93aa1ac8581fac0f7d4ab42406569409a737bdf9de584903b372c5', // 2
+        '0xa4a7208a40e95acaf2fe1a3c675b1b5d8c341060e4f179b76ba79493582a95a6', // 3
+        '0x989a7025bda9312b19569d9e84e33a624e7fc007e54db23b6758d5f819647071', // 4
+        '0xd279eb4bf22b2aeded31e65a126516215a9d93f83e3e425fdcd1a05ab347e535', // 5
+        '0x291bd553ea938a33785762f076cbad142bde4a0caf55fbf122ac07d7489414ed' // 6
+      ];
+
       before(async () => {
         mmr = await MMRWrapper.new();
-        for (let i = 0; i < 40; i++) {
-          await mmr.append('0x0000');
+        for (let i = 0; i < leafHashes.length; i++) {
+          await mmr.append(leafHashes[i]);
         }
       });
+
       it('should return pass true when it receives a valid merkle proof', async () => {
-        let index = 27;
-        res = await mmr.getMerkleProof(index);
-        await mmrLib.inclusionProof(res.root, res.width, index, '0x0000', res.peakBagging, res.siblings).should.eventually.equal(true);
+        let index = 5;
+        let value = leafHashes[index];
+
+        res = await mmr.getMerkleProof.call(index);
+
+        console.log('root:', res.root);
+        console.log('width:', Number(res.width));
+        console.log('peak bagging:', res.peakBagging);
+        console.log('siblings:', res.siblings);
+
+        await mmrLib.inclusionProof(res.root, Number(res.width), index, value, res.peakBagging, res.siblings).should.eventually.equal(true);
       });
-      it('should revert when it receives an invalid merkle proof', async () => {
-        let index = 27;
-        res = await mmr.getMerkleProof(index);
-        // Stored value is 0x0000 not 0x0001
-        await mmrLib.inclusionProof(res.root, res.width, index, '0x0001', res.peakBagging, res.siblings).should.be.rejected;
-      });
+
+      // it('should revert when it receives an invalid merkle proof', async () => {
+      //   let index = 5;
+      //   res = await mmr.getMerkleProof(index);
+      //   // Stored value is 0x0000 not 0x0001
+      //   await mmrLib.inclusionProof(res.root, res.width, index, '0x0001', res.peakBagging, res.siblings).should.be.rejected;
+      // });
     });
   });
 });
+
+// TODO: Data from Vincent:
+
+// let proof = {
+//   leafHash: "0xc09d4a008a0f1ef37860bef33ec3088ccd94268c0bfba7ff1b3c2a1075b0eb92",
+//   leafIndex: 5,
+//   leafCount: 7,
+//   items: [
+//       "0xe53ee36ba6c068b1a6cfef7862fed5005df55615e1c9fa6eeefe08329ac4b94b",
+//       "0x99af07747700389aba6e6cb0ee5d553fa1241688d9f96e48987bca1d7f275cbe",
+//       "0xaf3327deed0515c8d1902c9b5cd375942d42f388f3bfe3d1cd6e1b86f9cc456c"
+//   ]
+// }
+
+// let leafHashes = [
+// "0xc3e7ba6b511162fead58f2c8b5764ce869ed1118011ac37392522ed16720bbcd",
+// "0x037ff5a3903a59630e03b84cda912c26bf19442efe2cd30c2a25547e06ded385",
+// "0xffb0ad2811094c7f63826e33b6d7b3afa72587be856a86f10e3d0d869bbc37e5",
+// "0xf47e991c124932a8573f782e1bc2fa62f628f8e1e074e6193170b0e302e37421",
+// "0xd2ad83af7d5b0387eb704e57f4539138df402d72704fb74fde7a33353fab598d",
+// "0xe232c7350837c9d87a948ddfc4286cc49d946e8cdad9121e91595f190ed7e54d", // or 0xc09d4a008a0f1ef37860bef33ec3088ccd94268c0bfba7ff1b3c2a1075b0eb92
+// "0x32d44b4a8e8a3046b9c02315847eb091678a59f136226e70d66f3a82bd836ce1"
+// ];
+
+// let interiorHashes = [
+// "0xbc54778fab79f586f007bd408dca2c4aa07959b27d1f2c8f4f2549d1fcfac8f8",
+// "0x00b0046bd2d63fcb760cf50a262448bb2bbf9a264b0b0950d8744044edf00dc3",
+// "0xe53ee36ba6c068b1a6cfef7862fed5005df55615e1c9fa6eeefe08329ac4b94b",
+// "0xdad09f50b41822fc5ecadc25b08c3a61531d4d60e962a5aa0b6998fad5c37c5e"
+// ];
+
+// let peakHashes = [
+// "0xda5e6d0616e05c6a6348605a37ca33493fc1a15ad1e6a405ee05c17843fdafed",
+// "0x99af07747700389aba6e6cb0ee5d553fa1241688d9f96e48987bca1d7f275cbe",
+// "0xaf3327deed0515c8d1902c9b5cd375942d42f388f3bfe3d1cd6e1b86f9cc456c"
+// ];
+
+// let rootHash = "0xfc4f9042bd2f73feb26f3fc42db834c5f1943fa20070ddf106c486a478a0d561";
